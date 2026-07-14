@@ -1,69 +1,131 @@
 """
 docx_writer.py
 
-Takes an EXISTING resume .docx and appends a clearly-labeled new section
-with tailored suggestions from draft_tailoring, producing a new editable
-.docx. Your original resume content is left completely untouched -- the
-new section is added at the end, so you can review each suggestion and
-manually merge whichever ones you want into your actual resume sections
-in Word.
+Edits an EXISTING resume .docx IN PLACE: replaces the professional summary
+text and inserts new bullets directly into the relevant existing sections
+(matched by content similarity), rather than appending a separate
+"suggestions" section at the end. All original formatting (fonts, bullet
+style, spacing) is preserved because new bullets are created by cloning an
+existing bullet paragraph's XML and swapping only its text.
+
+"unaddressable_gaps" are NOT written into the resume (a resume shouldn't
+list its own shortcomings) -- they're returned separately so you can log or
+review them outside the document.
 """
 
+import copy
+import re
 from docx import Document
-from docx.shared import Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.text.paragraph import Paragraph
+
+STOPWORDS = {
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+    "is", "are", "was", "were", "this", "that", "as", "by", "at", "from",
+}
 
 
-def write_tailored_docx(original_resume_path: str, draft: dict, output_path: str) -> str:
+def _words(text: str) -> set:
+    return {w for w in re.findall(r"[a-zA-Z0-9]+", text.lower()) if w not in STOPWORDS}
+
+
+def _replace_paragraph_text(paragraph: Paragraph, new_text: str) -> None:
+    """Overwrite a paragraph's visible text while keeping its first run's
+    formatting (font, size, bold, etc.) -- clears any extra runs so no
+    fragments of the old text linger."""
+    if not paragraph.runs:
+        paragraph.add_run(new_text)
+        return
+    paragraph.runs[0].text = new_text
+    for run in paragraph.runs[1:]:
+        run.text = ""
+
+
+def _insert_paragraph_after(anchor: Paragraph, new_text: str) -> Paragraph:
+    """Clone `anchor`'s paragraph (same style/bullet formatting), insert it
+    directly after `anchor` in the document, and set its text to `new_text`.
+    This is how new bullets end up looking identical to your existing ones."""
+    new_p_element = copy.deepcopy(anchor._p)
+    anchor._p.addnext(new_p_element)
+    new_paragraph = Paragraph(new_p_element, anchor._parent)
+    _replace_paragraph_text(new_paragraph, new_text)
+    return new_paragraph
+
+
+def _find_summary_paragraph(doc: Document) -> Paragraph | None:
+    """Find the paragraph right after a 'PROFESSIONAL SUMMARY' heading."""
+    paragraphs = doc.paragraphs
+    for i, p in enumerate(paragraphs):
+        if "professional summary" in p.text.strip().lower():
+            # the summary content is typically the next non-empty paragraph
+            for j in range(i + 1, len(paragraphs)):
+                if paragraphs[j].text.strip():
+                    return paragraphs[j]
+    return None
+
+
+def _find_best_matching_bullet(doc: Document, query_text: str) -> Paragraph | None:
+    """Find the existing bullet paragraph whose text has the highest word
+    overlap with query_text (typically the 'based_on' field from a
+    suggested bullet) -- this is the anchor we insert the new bullet after."""
+    query_words = _words(query_text)
+    if not query_words:
+        return None
+
+    best_paragraph = None
+    best_score = 0
+    for p in doc.paragraphs:
+        if p.style.name != "List Paragraph" or not p.text.strip():
+            continue
+        overlap = len(query_words & _words(p.text))
+        if overlap > best_score:
+            best_score = overlap
+            best_paragraph = p
+
+    return best_paragraph if best_score > 0 else None
+
+
+def write_tailored_docx(original_resume_path: str, draft: dict, output_path: str) -> dict:
+    """
+    Returns a dict with:
+      - output_path: where the tailored .docx was saved
+      - bullets_placed: bullets successfully inserted into a matched section
+      - bullets_skipped: bullets with no good match found (not inserted --
+        logged here so you can add them manually if you want them)
+      - unaddressable_gaps: passed through from draft, for your own review
+        (never written into the resume itself)
+    """
     doc = Document(original_resume_path)
 
-    # A visual divider so it's obvious where your original resume ends and
-    # the suggestions begin.
-    divider = doc.add_paragraph()
-    divider.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = divider.add_run("— " * 20)
-    run.font.size = Pt(9)
+    # 1. Replace the professional summary in place
+    summary_paragraph = _find_summary_paragraph(doc)
+    if summary_paragraph is not None:
+        _replace_paragraph_text(summary_paragraph, draft.get("tailored_summary", ""))
+        summary_updated = True
+    else:
+        summary_updated = False
 
-    heading = doc.add_heading("SUGGESTED TAILORED ADDITIONS (Review Before Adding)", level=1)
-
-    note = doc.add_paragraph()
-    note_run = note.add_run(
-        "The section below was generated to help tailor this resume to a specific "
-        "job description. Nothing here has been added to your resume above -- "
-        "review each suggestion and copy anything you agree with into the "
-        "appropriate section yourself."
-    )
-    note_run.italic = True
-    note_run.font.size = Pt(9)
-
-    doc.add_heading("Suggested Professional Summary", level=2)
-    doc.add_paragraph(draft.get("tailored_summary", ""))
-
-    suggested_bullets = draft.get("suggested_bullets", [])
-    if suggested_bullets:
-        doc.add_heading("Suggested Bullet Additions", level=2)
-        for b in suggested_bullets:
-            # Using a manual bullet character rather than the "List Bullet"
-            # style -- documents not created from Word's default template
-            # (e.g. ones built programmatically) often don't have that style
-            # defined, which raises a KeyError.
-            p = doc.add_paragraph()
-            p.add_run(f"•  {b['bullet_text']}")
-            note_p = doc.add_paragraph()
-            note_run = note_p.add_run(
-                f"    (addresses: {b['target_gap']} — based on: {b['based_on']})"
-            )
-            note_run.italic = True
-            note_run.font.size = Pt(8)
-
-    unaddressable = draft.get("unaddressable_gaps", [])
-    if unaddressable:
-        doc.add_heading("Gaps Not Addressed (real gaps -- consider a project or course)", level=2)
-        for gap in unaddressable:
-            doc.add_paragraph(f"•  {gap}")
+    # 2. Insert each suggested bullet directly after its best-matching
+    # existing bullet, so it lands in the right section with matching
+    # formatting -- instead of a separate appended section.
+    bullets_placed = []
+    bullets_skipped = []
+    for b in draft.get("suggested_bullets", []):
+        anchor = _find_best_matching_bullet(doc, b.get("based_on", ""))
+        if anchor is not None:
+            _insert_paragraph_after(anchor, b["bullet_text"])
+            bullets_placed.append(b["bullet_text"])
+        else:
+            bullets_skipped.append(b["bullet_text"])
 
     doc.save(output_path)
-    return output_path
+
+    return {
+        "output_path": output_path,
+        "summary_updated": summary_updated,
+        "bullets_placed": bullets_placed,
+        "bullets_skipped": bullets_skipped,
+        "unaddressable_gaps": draft.get("unaddressable_gaps", []),
+    }
 
 
 if __name__ == "__main__":
@@ -77,5 +139,17 @@ if __name__ == "__main__":
     with open(sys.argv[2]) as f:
         draft = json.load(f)
 
-    out = write_tailored_docx(sys.argv[1], draft, sys.argv[3])
-    print(f"Wrote tailored resume to {out}")
+    result = write_tailored_docx(sys.argv[1], draft, sys.argv[3])
+    print(f"Saved to: {result['output_path']}")
+    print(f"Summary updated: {result['summary_updated']}")
+    print(f"Bullets placed: {len(result['bullets_placed'])}")
+    for bt in result["bullets_placed"]:
+        print(f"  + {bt}")
+    if result["bullets_skipped"]:
+        print(f"Bullets skipped (no good match found): {len(result['bullets_skipped'])}")
+        for bt in result["bullets_skipped"]:
+            print(f"  ? {bt}")
+    if result["unaddressable_gaps"]:
+        print("Unaddressable gaps (not written to resume -- for your own review):")
+        for g in result["unaddressable_gaps"]:
+            print(f"  - {g}")
