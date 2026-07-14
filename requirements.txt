@@ -1,0 +1,5 @@
+docx==0.2.4
+langgraph==1.2.9
+openai==2.45.0
+pypdf==6.14.2
+python-dotenv==1.2.2
