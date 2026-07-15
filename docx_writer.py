@@ -1,7 +1,7 @@
 """
 docx_writer.py
 
-Edits an EXISTING resume .docx IN PLACE: replaces the professional summary
+Edits an EXISTING resume.docx IN PLACE: replaces the professional summary
 text and inserts new bullets directly into the relevant existing sections
 (matched by content similarity), rather than appending a separate
 "suggestions" section at the end. All original formatting (fonts, bullet

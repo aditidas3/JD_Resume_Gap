@@ -1,21 +1,12 @@
 """
 graph.py
 
-THIS is where LangGraph actually gets used -- until now we were calling node
-functions directly and merging state ourselves (`state.update(...)`), which
-works for testing one node in isolation but isn't LangGraph. Here we build a
-real `StateGraph`: nodes + edges, compiled once, then run with `.invoke()`.
-
 Current graph (linear for now -- branching/retry comes when we add
 self_critique):
 
-    START -> extract_jd_profile -> score_match -> draft_tailoring -> END
+START -> extract_jd_profile -> score_match -> draft_tailoring -> END
 """
 
-# load_dotenv() MUST run before we import nodes.py below -- nodes.py reads
-# os.environ["OPENROUTER_MODEL"] etc. at import time (module load), not
-# inside a function, so env vars need to already be loaded before that
-# import line runs, not after it.
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -32,9 +23,6 @@ def build_graph():
     builder.add_node("score_match", score_match)
     builder.add_node("draft_tailoring", draft_tailoring)
 
-    # Wire the edges: START is a special LangGraph marker, not a real node.
-    # Still a straight line -- draft_tailoring always runs once, no branching
-    # yet. That comes when we add self_critique with a conditional edge.
     builder.add_edge(START, "extract_jd_profile")
     builder.add_edge("extract_jd_profile", "score_match")
     builder.add_edge("score_match", "draft_tailoring")
@@ -55,9 +43,7 @@ if __name__ == "__main__":
     OUTPUT_DIR = Path("output")
 
     def find_input_files():
-        """Auto-detect the JD (.txt) and resume (.docx/.pdf) inside input/,
-        so you don't have to type filenames every time -- just drop the two
-        files in input/ and run `python graph.py` with no arguments."""
+        """Detects input file JD and resume from input folder"""
         if not INPUT_DIR.exists():
             print(f"'{INPUT_DIR}/' doesn't exist. Create it and put your JD "
                   f"(.txt) and resume (.docx or .pdf) inside.")
@@ -80,7 +66,7 @@ if __name__ == "__main__":
 
     # Two ways to run this:
     #   python graph.py                          -> auto-detect from input/
-    #   python graph.py <jd_file> <resume_file>   -> explicit paths (old behavior, still works)
+    #   python graph.py <jd_file> <resume_file>   -> explicit paths 
     if len(sys.argv) >= 3:
         jd_path = sys.argv[1]
         resume_path = sys.argv[2]
@@ -96,9 +82,6 @@ if __name__ == "__main__":
 
     graph = build_graph()
 
-    # .invoke() runs the whole graph: START -> ... -> END, following the
-    # edges we defined, passing state through and merging each node's
-    # returned dict into it automatically -- no manual state.update() needed.
     final_state = graph.invoke({"jd_text": jd_text, "resume_text": resume_text})
 
     print("\n=== JD PROFILE ===")

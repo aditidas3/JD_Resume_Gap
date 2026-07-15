@@ -2,10 +2,8 @@
 nodes.py
 
 Each function here is a LangGraph "node": takes the current GraphState,
-returns a dict of fields to update. We build and test these one at a time.
+returns a dict of fields to update.
 
-Using OpenRouter (OpenAI-compatible API) instead of the Anthropic SDK directly --
-same Claude models available, billed through OpenRouter's pay-as-you-go credits.
 """
 
 import os
@@ -25,10 +23,7 @@ client = OpenAI(
 
 
 def timed(func):
-    """Decorator: prints how long a node took to run. Place this ABOVE any
-    node function definition (i.e. `@timed` on the line right before `def`).
-    Your original version was missing `func`/`args`/`kwargs` as parameters,
-    never called `func(...)`'s result, and didn't import `time` -- fixed here."""
+    """Decorator: prints how long a node took to run. """
     @wraps(func)
     def wrapper(*args, **kwargs):
         start = time.time()
@@ -41,6 +36,7 @@ def timed(func):
 
 @timed
 def extract_jd_profile(state: GraphState) -> dict:
+    """List all the skills and other information from jd and stores in jd_profile node """
     prompt = f"""Extract a structured profile from this job description.
 
 Job descriptions vary in structure -- some have explicit "Required" vs \
@@ -85,10 +81,7 @@ Job description:
 """
     response = client.chat.completions.create(
         model=MODEL,
-        max_tokens=8000,  # bumped up: this model spends heavy tokens on internal
-                          # reasoning before answering (observed ~90% reasoning
-                          # ratio even on trivial prompts), so a long JD-extraction
-                          # prompt needs generous headroom
+        max_tokens=8000,
         messages=[{"role": "user", "content": prompt}],
     )
     message = response.choices[0].message
@@ -122,13 +115,10 @@ TIER_WEIGHTS = {"must_have": 3, "preferred": 2, "mentioned": 1, "nontech": 1}
 
 def _flag_possible_hallucinations(scored_requirements: list, resume_text: str) -> None:
     """
-    Cheap, code-only sanity check (no extra LLM call): pull out proper-noun-
-    looking phrases (consecutive capitalized words, e.g. "CKE Restaurants")
-    from each evidence string, and warn if that phrase doesn't actually
-    appear anywhere in the resume text. This is a heuristic, not proof --
-    it can miss things and can occasionally false-positive on legitimate
-    text -- but it would have caught the fabricated "CKE Restaurants"
-    example directly.
+    Cheap, code-only sanity check (no extra LLM call): pull out proper-noun-looking phrases
+    Catches: multi-word names
+    Misses: single word fabrications like "Docker" 
+    False positives: Legitimate proper nouns that resume spells differently. e.g., ML vs Machine Learning
     """
     resume_lower = resume_text.lower()
     proper_noun_pattern = re.compile(r"\b([A-Z][a-zA-Z0-9&]*(?:\s+[A-Z][a-zA-Z0-9&]*)+)\b")
@@ -146,6 +136,9 @@ def _flag_possible_hallucinations(scored_requirements: list, resume_text: str) -
 
 @timed
 def score_match(state: GraphState) -> dict:
+    """ Stores all skills scores after comparing them with resume and identify gaps
+        Extracted nodes are scored_requirements, overall_score, gaps
+    """
     jd_profile = state["jd_profile"]
 
     # Flatten all four skill buckets into one list, tagging each with its tier
@@ -205,8 +198,7 @@ Return ONLY a JSON array, no other text, in this exact shape:
 """
     response = client.chat.completions.create(
         model=MODEL,
-        max_tokens=12000,  # scoring potentially 20+ requirements in one call,
-                           # plus heavy reasoning overhead -- needs generous headroom
+        max_tokens=12000,
         messages=[{"role": "user", "content": prompt}],
     )
     message = response.choices[0].message
@@ -227,9 +219,7 @@ Return ONLY a JSON array, no other text, in this exact shape:
         print(f"[debug] Full raw text:\n{raw}")
         raise
 
-    # Weighted overall score: NOT asked from the model -- computed here in
-    # plain code, so it's transparent and reproducible rather than a black-box
-    # judgment call baked into the prompt.
+    # Weighted overall score: computed in plain code
     total_weight = 0
     weighted_sum = 0
     for r in scored_requirements:
@@ -251,6 +241,7 @@ Return ONLY a JSON array, no other text, in this exact shape:
 
 @timed
 def draft_tailoring(state: GraphState) -> dict:
+    """ What to do about the gaps. Tailor actionable output """
     jd_profile = state["jd_profile"]
     gaps = state["gaps"]
 
