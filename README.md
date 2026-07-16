@@ -33,15 +33,22 @@ suggestions without overclaiming. This agent automates that workflow, and becaus
                    ▼
         ┌──────────────────────┐
         │ draft_tailoring      │   LLM call: tailored summary + bullet
-        │ -> draft_bullets     │   suggestions addressing gaps, only
-        └──────────┬───────────┘   from real resume content (no invented
-                   │                projects/metrics/tools)
-                   ▼
-                  END
-                   │
-                   ▼ (outside the graph)
+  ┌────>│ -> draft_bullets     │   suggestions addressing gaps, only
+  |     └──────────┬───────────┘   from real resume content (no invented
+  |                │                projects/metrics/tools)
+  |                ▼
+  |    ┌──────────────────────┐
+  |    │   self_critique      │   LLM call: self critique tailored summary output
+  └────│ -> critique_notes    |   for quality and honesty before updating 
+       | -> needs_revision    │   resume. total tries = 2
+       └──────────┬───────────┘   
+                  │                
+                  ▼
+                 END
+                  │
+                  ▼ (outside the graph)
         write_tailored_docx()     Appends suggestions to your real resume
-                                  .docx as a new, clearly-labeled section
+                                  .docx as a new, as highlighted section
 ```
 
 ## Files
@@ -49,7 +56,7 @@ suggestions without overclaiming. This agent automates that workflow, and becaus
 | File | Role |
 |---|---|
 | `state.py` | `GraphState` / `JDProfile` / `ScoredRequirement` — the shared data schema that flows through every node |
-| `nodes.py` | The three LLM-calling nodes: `extract_jd_profile`, `score_match`, `draft_tailoring`, plus `_flag_possible_hallucinations` (a code-only check, no extra LLM call, that flags evidence containing details not actually in the resume) and the `timed` decorator |
+| `nodes.py` | The four LLM-calling nodes: `extract_jd_profile`, `score_match`, `draft_tailoring`, `self_critique` plus `_flag_possible_hallucinations` (a code-only check, no extra LLM call, that flags evidence containing details not actually in the resume) and the `timed` decorator |
 | `graph.py` | The actual LangGraph wiring (`StateGraph`, nodes, edges, `.compile()`) and the CLI entry point |
 | `resume_reader.py` | Reads resume text from `.docx`, `.pdf`, or `.txt` |
 | `docx_writer.py` | Appends the tailoring suggestions to your real resume `.docx` as a new section, leaving your original content untouched |
