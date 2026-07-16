@@ -90,7 +90,6 @@ Job description:
             f"Model returned empty content. finish_reason="
             f"{response.choices[0].finish_reason!r}. "
             f"reasoning_content present: {bool(getattr(message, 'reasoning_content', None))}. "
-            f"Try increasing max_tokens further, or check debug_response.py output."
         )
     raw = message.content.strip()
     raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
