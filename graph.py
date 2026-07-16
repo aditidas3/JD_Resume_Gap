@@ -1,10 +1,18 @@
 """
 graph.py
 
-Current graph (linear for now -- branching/retry comes when we add
-self_critique):
+Current graph -- now with real branching:
 
-START -> extract_jd_profile -> score_match -> draft_tailoring -> END
+START -> extract_jd_profile -> score_match -> draft_tailoring -> self_critique
+                                                     ▲                  │
+                                                     └──── retry ───────┤
+                                                                        │
+                                                                    (passes,
+                                                                  or out of
+                                                                   retries)
+                                                                        │
+                                                                        ▼
+                                                                       END
 """
 
 from dotenv import load_dotenv
@@ -12,7 +20,22 @@ load_dotenv()
 
 from langgraph.graph import StateGraph, START, END
 from state import GraphState
-from nodes import extract_jd_profile, score_match, draft_tailoring
+from nodes import extract_jd_profile, score_match, draft_tailoring, self_critique
+
+MAX_REVISIONS = 2  # cap: up to 2 retries, so 3 attempts total at most
+
+
+def decide_after_critique(state: GraphState) -> str:
+    """
+    The conditional edge: looks at what self_critique found and decides
+    where to go next. Returns a STRING naming the next step -- graph.py's
+    add_conditional_edges() maps that string to an actual node/END below.
+    """
+    if not state.get("needs_revision"):
+        return "done"
+    if state.get("revision_count", 0) >= MAX_REVISIONS:
+        return "give_up"  # safety cap so this can't loop forever
+    return "retry"
 
 
 def build_graph():
@@ -22,11 +45,24 @@ def build_graph():
     builder.add_node("extract_jd_profile", extract_jd_profile)
     builder.add_node("score_match", score_match)
     builder.add_node("draft_tailoring", draft_tailoring)
+    builder.add_node("self_critique", self_critique)
 
     builder.add_edge(START, "extract_jd_profile")
     builder.add_edge("extract_jd_profile", "score_match")
     builder.add_edge("score_match", "draft_tailoring")
-    builder.add_edge("draft_tailoring", END)
+    builder.add_edge("draft_tailoring", "self_critique")
+
+    # This is the real branching: after self_critique runs, decide_after_critique
+    # looks at the state and picks one of three paths.
+    builder.add_conditional_edges(
+        "self_critique",
+        decide_after_critique,
+        {
+            "retry": "draft_tailoring",  # loop back for another attempt
+            "done": END,
+            "give_up": END,
+        },
+    )
 
     # Compile turns the node/edge definitions into a runnable object
     return builder.compile()
@@ -95,11 +131,19 @@ if __name__ == "__main__":
     for g in final_state["gaps"]:
         print(f"  [{g['tier']}] {g['requirement']} (score: {g['score']}) — {g['evidence']}")
 
+    print("\n=== SELF-CRITIQUE ===")
+    print(f"Revisions needed: {final_state.get('revision_count', 0)}")
+    if final_state.get("critique_notes"):
+        print(f"Final critique notes: {final_state['critique_notes']}")
+
     summary = {
         "jd_profile": final_state["jd_profile"],
         "overall_score": final_state["overall_score"],
         "scored_requirements": final_state["scored_requirements"],
         "gaps": final_state["gaps"],
+        "revision_count": final_state.get("revision_count", 0),
+        "critique_notes": final_state.get("critique_notes", ""),
+        "needs_revision": final_state.get("needs_revision", False),
         "resume_updates": None,
     }
 

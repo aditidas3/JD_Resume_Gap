@@ -243,17 +243,26 @@ def draft_tailoring(state: GraphState) -> dict:
     """ What to do about the gaps. Tailor actionable output """
     jd_profile = state["jd_profile"]
     gaps = state["gaps"]
+    revision_count = state.get("revision_count", 0)
 
     gaps_listing = "\n".join(
         f"- [{g['tier']}] {g['requirement']} (current score: {g['score']}) — {g['evidence']}"
         for g in gaps
     )
 
+    previous_feedback = ""
+    if revision_count > 0 and state.get("critique_notes"):
+        previous_feedback = f"""
+IMPORTANT -- this is a REVISION. Your previous attempt was reviewed and \
+found lacking, for this specific reason: "{state['critique_notes']}" \
+Address this feedback directly in your revised draft below.
+"""
+
     prompt = f"""You are helping a candidate tailor their resume for a specific \
 job, based on identified gaps between their resume and the job requirements.
 
 Job title: {jd_profile.get('title', 'N/A')}
-
+{previous_feedback}
 Gaps identified (things the resume currently covers weakly or not at all):
 {gaps_listing}
 
@@ -314,4 +323,85 @@ Return ONLY a JSON object, no other text, in this exact shape:
         state["resume_text"],
     )
 
-    return {"draft_bullets": draft}
+    return {"draft_bullets": draft, "revision_count": revision_count + 1}
+
+
+@timed
+def self_critique(state: GraphState) -> dict:
+    """
+    Reviews draft_tailoring's output for quality and honesty BEFORE it gets written into the actual resume docx. 
+    """
+    jd_profile = state["jd_profile"]
+    draft = state["draft_bullets"]
+    gaps = state["gaps"]
+
+    gaps_listing = "\n".join(
+        f"- [{g['tier']}] {g['requirement']} (current score: {g['score']}) — {g['evidence']}"
+        for g in gaps
+    )
+    bullets_listing = "\n".join(
+        f"- (addresses: {b['target_gap']}) {b['bullet_text']} [based on: {b['based_on']}]"
+        for b in draft.get("suggested_bullets", [])
+    ) or "(none)"
+    unaddressable_listing = "\n".join(f"- {g}" for g in draft.get("unaddressable_gaps", [])) or "(none)"
+
+    prompt = f"""You are reviewing a drafted resume-tailoring output for \
+quality, before it gets applied to the candidate's actual resume. Be a \
+strict, honest reviewer -- your job is to catch weak work, not rubber-stamp it.
+
+Job title: {jd_profile.get('title', 'N/A')}
+
+Gaps this draft was supposed to address:
+{gaps_listing}
+
+Drafted tailored summary:
+{draft.get('tailored_summary', '')}
+
+Drafted suggested bullets:
+{bullets_listing}
+
+Gaps the draft marked as unaddressable (i.e. gave up on):
+{unaddressable_listing}
+
+Evaluate honestly against these three checks:
+1. SPECIFICITY: are the bullets and summary specific and genuinely tied to \
+real resume content, or vague/generic filler ("skilled in various tools", \
+"strong problem-solving ability" with no concrete backing)?
+2. RELEVANCE: does each bullet actually address the gap it claims to, or is \
+the connection a stretch?
+3. GIVING UP TOO EASILY: for each "unaddressable" gap, could the resume \
+actually have supported an honest bullet that the draft simply missed? \
+(Note: agreeing that a gap is genuinely unaddressable is NOT a failure --\
+only flag this if the draft was clearly too quick to give up on something \
+addressable.)
+
+Return ONLY a JSON object, no other text, in this exact shape:
+{{"passes": true/false, "critique_notes": "specific, actionable feedback on exactly what to fix -- empty string if passes is true"}}
+"""
+    response = client.chat.completions.create(
+        model=MODEL,
+        max_tokens=8000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    message = response.choices[0].message
+    if message.content is None:
+        raise RuntimeError(
+            f"Model returned empty content in self_critique. finish_reason="
+            f"{response.choices[0].finish_reason!r}."
+        )
+    raw = message.content.strip()
+    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+    print(f"[debug] finish_reason={response.choices[0].finish_reason!r}, raw length={len(raw)}")
+
+    try:
+        critique = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"[debug] JSON parse failed: {e}")
+        print(f"[debug] Full raw text:\n{raw}")
+        raise
+
+    return {
+        "critique_notes": critique.get("critique_notes", ""),
+        "needs_revision": not critique.get("passes", True),
+    }

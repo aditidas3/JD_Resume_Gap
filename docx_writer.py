@@ -17,6 +17,9 @@ import copy
 import re
 from docx import Document
 from docx.text.paragraph import Paragraph
+from docx.shared import RGBColor
+
+HIGHLIGHT_COLOR = RGBColor(0x1F, 0x4E, 0x9C)  # blue
 
 STOPWORDS = {
     "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
@@ -28,26 +31,37 @@ def _words(text: str) -> set:
     return {w for w in re.findall(r"[a-zA-Z0-9]+", text.lower()) if w not in STOPWORDS}
 
 
-def _replace_paragraph_text(paragraph: Paragraph, new_text: str) -> None:
+def _replace_paragraph_text(paragraph: Paragraph, new_text: str, highlight: bool = False) -> None:
     """Overwrite a paragraph's visible text while keeping its first run's
     formatting (font, size, bold, etc.) -- clears any extra runs so no
-    fragments of the old text linger."""
+    fragments of the old text linger. If highlight=True, marks the new text
+    italic + blue so it's visually obvious what the tool changed -- remove
+    this formatting (select text -> clear formatting) before sending the
+    resume out for real."""
     if not paragraph.runs:
-        paragraph.add_run(new_text)
+        run = paragraph.add_run(new_text)
+        if highlight:
+            run.italic = True
+            run.font.color.rgb = HIGHLIGHT_COLOR
         return
     paragraph.runs[0].text = new_text
+    if highlight:
+        paragraph.runs[0].italic = True
+        paragraph.runs[0].font.color.rgb = HIGHLIGHT_COLOR
     for run in paragraph.runs[1:]:
         run.text = ""
 
 
-def _insert_paragraph_after(anchor: Paragraph, new_text: str) -> Paragraph:
+def _insert_paragraph_after(anchor: Paragraph, new_text: str, highlight: bool = True) -> Paragraph:
     """Clone `anchor`'s paragraph (same style/bullet formatting), insert it
     directly after `anchor` in the document, and set its text to `new_text`.
-    This is how new bullets end up looking identical to your existing ones."""
+    This is how new bullets end up looking identical to your existing ones.
+    highlight=True by default here since every bullet this function inserts
+    is, by definition, new content."""
     new_p_element = copy.deepcopy(anchor._p)
     anchor._p.addnext(new_p_element)
     new_paragraph = Paragraph(new_p_element, anchor._parent)
-    _replace_paragraph_text(new_paragraph, new_text)
+    _replace_paragraph_text(new_paragraph, new_text, highlight=highlight)
     return new_paragraph
 
 
@@ -96,10 +110,11 @@ def write_tailored_docx(original_resume_path: str, draft: dict, output_path: str
     """
     doc = Document(original_resume_path)
 
-    # 1. Replace the professional summary in place
+    # 1. Replace the professional summary in place -- highlighted since it's
+    # entirely new/changed content (per your call: summary gets highlighted too)
     summary_paragraph = _find_summary_paragraph(doc)
     if summary_paragraph is not None:
-        _replace_paragraph_text(summary_paragraph, draft.get("tailored_summary", ""))
+        _replace_paragraph_text(summary_paragraph, draft.get("tailored_summary", ""), highlight=True)
         summary_updated = True
     else:
         summary_updated = False
