@@ -35,6 +35,7 @@ def build_graph():
 if __name__ == "__main__":
     import sys
     import glob
+    import json
     from pathlib import Path
     from resume_reader import read_resume
     from docx_writer import write_tailored_docx
@@ -94,14 +95,31 @@ if __name__ == "__main__":
     for g in final_state["gaps"]:
         print(f"  [{g['tier']}] {g['requirement']} (score: {g['score']}) — {g['evidence']}")
 
+    summary = {
+        "jd_profile": final_state["jd_profile"],
+        "overall_score": final_state["overall_score"],
+        "scored_requirements": final_state["scored_requirements"],
+        "gaps": final_state["gaps"],
+        "resume_updates": None,
+    }
+
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
     # Only .docx resumes can be edited in place -- if the input was
     # .pdf/.txt, we don't write a tailored .docx.
     if resume_path.lower().endswith(".docx"):
-        OUTPUT_DIR.mkdir(exist_ok=True)  # create output/ automatically if missing
         output_filename = Path(resume_path).stem + "_tailored.docx"
         output_path = OUTPUT_DIR / output_filename
 
         result = write_tailored_docx(resume_path, final_state["draft_bullets"], str(output_path))
+
+        summary["resume_updates"] = {
+            "output_path": result["output_path"],
+            "summary_updated": result["summary_updated"],
+            "bullets_placed": result["bullets_placed"],
+            "bullets_skipped": result["bullets_skipped"],
+            "unaddressable_gaps": result["unaddressable_gaps"],
+        }
 
         print(f"\n=== TAILORED RESUME WRITTEN ===\n{result['output_path']}")
         print(f"Summary updated: {result['summary_updated']}")
@@ -118,3 +136,8 @@ if __name__ == "__main__":
             "docx_writer only edits .docx files in place. Your input was "
             f"'{resume_path}' -- convert your resume to .docx first."
         )
+
+    summary_path = OUTPUT_DIR / "summary.json"
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"\n=== SUMMARY WRITTEN ===\n{summary_path}")
