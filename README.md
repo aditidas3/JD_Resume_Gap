@@ -77,18 +77,14 @@ Create an output folder, this will contain resume_tailored.docx
 
 ```bash
 python graph.py <path to jd_file.txt> <path to resume_file.docx>
-
-or 
-
-python graph.py
 ```
 
 This runs the full graph end-to-end and prints:
 - The extracted JD profile
 - The weighted overall match score (0-100)
 - The list of gaps, with evidence for each
-- Writes `resume_tailored.docx` — your original resume with a updated sections with highlights. Check and update highlights to match the original font before submitting
-- Writes summary.json - jd_profile (technical and soft skills mentioned in jd), overall score, gaps, resume updates.
+- Writes `resume_tailored_xyz.docx` — your original resume with a updated sections with highlights. Check and update highlights to match the original font before submitting
+- Writes summary_xyz.json - jd_profile (technical and soft skills mentioned in jd), overall score, gaps, resume updates.
 
 If your resume is `.pdf` or `.txt` instead of `.docx`, everything runs except the final docx-writing step (that step specifically edits an existing Word file in place).
 
